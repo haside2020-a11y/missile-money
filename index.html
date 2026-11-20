@@ -1,0 +1,910 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>미사일 머니 - 프로토타입 v1</title>
+<style>
+  *{box-sizing:border-box}
+  html,body{margin:0;background:#0b0d18;color:#e8eaf6;font-family:system-ui,-apple-system,"Apple SD Gothic Neo","Malgun Gothic","Noto Sans KR",sans-serif}
+  #app{max-width:980px;margin:0 auto;padding:12px}
+  h1{font-size:18px;margin:4px 0 10px;letter-spacing:.5px}
+  h1 small{font-weight:400;color:#8b90b5;margin-left:8px;font-size:12px}
+  #stage{position:relative;border-radius:10px;overflow:hidden;border:1px solid #262a4a;background:#000}
+  canvas{display:block;width:100%;height:auto}
+  #overlay{position:absolute;inset:0;display:flex;background:rgba(6,8,20,.72);padding:10px;overflow:auto}
+  #overlay .card{margin:auto}
+  #overlay.hide{display:none}
+  .card{background:#14172c;border:1px solid #333866;border-radius:12px;padding:18px 20px;width:min(560px,100%);box-shadow:0 10px 40px rgba(0,0,0,.5)}
+  .card h2{margin:0 0 6px;font-size:22px}
+  .card p{margin:6px 0;color:#b6bbe0;font-size:14px;line-height:1.55}
+  .card .sub b{color:#ffd24d}
+  .shop{margin:12px 0;display:flex;flex-direction:column;gap:7px}
+  .row{display:grid;grid-template-columns:1.5fr 1fr 1.1fr auto;gap:8px;align-items:center;background:#1b1f3a;border-radius:8px;padding:8px 10px}
+  .nm b{display:block;font-size:14px}
+  .nm small{color:#8b90b5;font-size:11px}
+  .pips{display:flex;gap:3px;flex-wrap:wrap}
+  .pip{width:9px;height:9px;border-radius:2px;background:#33396a}
+  .pip.on{background:#ffb02e}
+  .cur{font-size:12px;color:#cfd3f5}
+  button{font:inherit;cursor:pointer;border:0;border-radius:8px;padding:8px 14px;background:#2c3263;color:#fff}
+  button:hover:not(:disabled){background:#3a4286}
+  button:disabled{opacity:.4;cursor:default}
+  button.primary{background:#e8452c;font-weight:700;padding:11px 20px;width:100%;font-size:15px}
+  button.primary:hover{background:#ff5a3f}
+  #panel{display:flex;flex-wrap:wrap;gap:10px 18px;align-items:center;margin-top:10px;background:#12152a;border:1px solid #262a4a;border-radius:10px;padding:10px 12px}
+  .grp{display:flex;align-items:center;gap:6px}
+  .grp label{font-size:12px;color:#8b90b5;min-width:34px}
+  .val{min-width:56px;text-align:center;font-weight:700;font-variant-numeric:tabular-nums;font-size:16px}
+  #fire{background:#e8452c;font-weight:800;font-size:16px;padding:10px 26px;margin-left:auto}
+  #fire:hover:not(:disabled){background:#ff5a3f}
+  .sec{margin:10px 0 4px;font-size:12px;color:#8b90b5;font-weight:700}
+  .hint{color:#7c82ab;font-size:12px;line-height:1.6;margin:10px 2px}
+  .tools{display:flex;gap:6px}
+  .tools button{padding:6px 10px;font-size:12px;background:#1d2142}
+  @media (max-width:560px){.row{grid-template-columns:1fr 1fr}.row button{grid-column:span 2}}
+</style>
+</head>
+<body>
+<div id="app">
+  <h1>미사일 머니<small>프로토타입 v1 - Scorched Earth 스타일</small></h1>
+  <div id="stage">
+    <canvas id="c" width="960" height="720"></canvas>
+    <div id="overlay"></div>
+  </div>
+  <div id="panel">
+    <div class="grp"><label>각도</label>
+      <button data-hold="left">◀</button><span class="val" id="vAngle">60°</span><button data-hold="right">▶</button></div>
+    <div class="grp"><label>파워</label>
+      <button data-hold="down">−</button><span class="val" id="vPower">60</span><button data-hold="up">+</button></div>
+    <div class="grp"><label>무기</label>
+      <button data-wp="-1">◀</button><span class="val" id="vWpn" style="min-width:116px;font-size:14px">기본 미사일</span><button data-wp="1">▶</button></div>
+    <div class="grp"><label>이동</label>
+      <button data-hold="mleft">◁</button><button data-hold="mright">▷</button></div>
+    <div class="grp"><span id="vInfo" style="font-size:12px;color:#b6bbe0"></span></div>
+    <div class="tools"><button id="mute">소리 켬</button><button id="reset">처음부터</button></div>
+    <button id="fire">발사</button>
+  </div>
+  <p class="hint">
+    조작: 방향키 좌우로 각도, 위아래로 파워, A와 D로 이동(턴마다 정해진 거리만), Q와 E로 무기 선택, 스페이스바로 발사 (Shift를 누르면 미세 조정).
+    적을 맞히면 돈이 들어오고 라운드가 끝나면 상점에서 다양한 미사일을 살 수 있습니다. 가장 비싼 건 핵폭탄입니다.
+    상대 AI도 라운드마다 장비를 사서 강해집니다.
+  </p>
+</div>
+
+<script>
+(()=>{
+'use strict';
+const W=960,H=720,G=0.13,WIND_K=0.002;
+const cv=document.getElementById('c'),ctx=cv.getContext('2d');
+const tcv=document.createElement('canvas');tcv.width=W;tcv.height=H;
+const tctx=tcv.getContext('2d');
+const img=tctx.createImageData(W,H);
+const solid=new Uint8Array(W*H);
+const colActive=new Uint8Array(W);
+let terrainDirty=true,settling=false;
+
+const rad=d=>d*Math.PI/180;
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+const rnd=(a,b)=>a+Math.random()*(b-a);
+
+/* ---------- 업그레이드 정의 ---------- */
+const UP=[
+  {key:'armor',name:'장갑',desc:'최대 체력이 늘어납니다',base:90,max:8,fmt:l=>'체력 '+(100+25*l)}
+];
+const cost=(u,l)=>Math.round(u.base*(1+0.7*l)/10)*10;
+const maxHp=t=>100+25*t.lv.armor;
+/* 무기: price는 한 묶음 가격 pack은 한 묶음당 발수 */
+const WEAPONS=[
+  {key:'basic',name:'기본 미사일',desc:'무제한 / 반경 36',r:36,dmg:36,kind:'std',price:0,pack:0},
+  {key:'med',name:'중형 미사일',desc:'반경 56 / 피해 52',r:56,dmg:52,kind:'std',price:120,pack:5},
+  {key:'big',name:'대형 미사일',desc:'반경 78 / 피해 72',r:78,dmg:72,kind:'std',price:200,pack:3},
+  {key:'mirv',name:'확산탄',desc:'정점에서 5발로 갈라집니다',r:34,dmg:30,kind:'mirv',price:260,pack:3},
+  {key:'pen',name:'관통탄',desc:'땅속 70px 침투 후 폭발',r:52,dmg:56,kind:'std',burrow:70,price:180,pack:3},
+  {key:'dig',name:'굴착탄',desc:'땅에 깊은 수직 구덩이를 팝니다',r:26,dmg:22,kind:'shaft',price:220,pack:2},
+  {key:'hop',name:'도약탄',desc:'튀어 오르며 3번 폭발합니다',r:34,dmg:34,kind:'hop',hops:2,price:240,pack:3},
+  {key:'dirt',name:'흙 폭탄',desc:'피해 없이 흙을 쌓아 올립니다',r:50,dmg:0,kind:'dirt',price:90,pack:3},
+  {key:'nuke1',name:'소형 핵',desc:'반경 120의 대폭발',r:120,dmg:100,kind:'std',price:600,pack:2},
+  {key:'nuke',name:'핵폭탄',desc:'맵의 절반을 날려버립니다',r:200,dmg:170,kind:'std',price:1500,pack:1}
+];
+const ownedW=t=>WEAPONS.filter(w=>w.key==='basic'||(t.ammo[w.key]||0)>0);
+const wpnOf=t=>WEAPONS.find(w=>w.key===t.sel)||WEAPONS[0];const TS=0.62; /* 탱크 크기 배율 */
+const MOVE_MAX=70,MOVE_SPD=0.8; /* 턴당 이동 가능 거리(px) */
+const SH_PTS=45,SH_MAX=3,SH_COST=90; /* 방어막 1회분 흡수량 / 최대 보유 횟수 / 가격 */
+const shCharges=t=>Math.ceil(t.shield/SH_PTS);
+
+/* ---------- 게임 상태 ---------- */
+let pending=[],tanks=[],projs=[],parts=[],floats=[],rings=[],flash=0,aiWind=0,shieldHit=-1;
+let round=1,wins=0,losses=0,turn=0,state='menu',wind=0,shake=0,settleWait=0;
+const ai={ta:120,tp:60,wait:0};
+const keys={},hold={};
+let bg=null;
+
+function newTank(id,name,color){
+  return {id,name,color,x:0,y:0,vy:0,hp:100,alive:true,angle:id?125:55,power:60,money:0,shield:0,fuel:70,ammo:{},sel:'basic',
+    lv:{armor:0}};
+}
+
+/* ---------- 배경 ---------- */
+function makeBg(){
+  bg=document.createElement('canvas');bg.width=W;bg.height=H;
+  const b=bg.getContext('2d');
+  const g=b.createLinearGradient(0,0,0,H);
+  g.addColorStop(0,'#070b24');g.addColorStop(.55,'#2b2257');g.addColorStop(1,'#c4546e');
+  b.fillStyle=g;b.fillRect(0,0,W,H);
+  for(let i=0;i<110;i++){
+    b.fillStyle='rgba(255,255,255,'+rnd(.2,.85)+')';
+    const s=Math.random()<.15?2:1;
+    b.fillRect(Math.random()*W,Math.random()*H*0.6,s,s);
+  }
+  b.fillStyle='rgba(255,244,214,.9)';
+  b.beginPath();b.arc(W*0.78,95,26,0,7);b.fill();
+  b.fillStyle='rgba(7,11,36,.35)';
+  b.beginPath();b.arc(W*0.78+9,90,24,0,7);b.fill();
+}
+
+/* ---------- 지형 ---------- */
+function genTerrain(xs){
+  const p1=rnd(0,6.28),p2=rnd(0,6.28),p3=rnd(0,6.28);
+  const a1=rnd(75,115),a2=rnd(38,62),a3=rnd(10,22);
+  const base=H*0.5,hs=new Array(W);
+  for(let x=0;x<W;x++){
+    const v=a1*Math.sin(x*0.006+p1)+a2*Math.sin(x*0.013+p2)+a3*Math.sin(x*0.031+p3);
+    hs[x]=base-170*Math.tanh(v/170);
+  }
+  for(const cx of xs){
+    let s=0,n=0;
+    for(let x=cx-14;x<=cx+14;x++){if(x>=0&&x<W){s+=hs[x];n++}}
+    const avg=s/n;
+    for(let x=cx-12;x<=cx+12;x++){if(x>=0&&x<W)hs[x]=avg}
+  }
+  solid.fill(0);
+  for(let x=0;x<W;x++){
+    const top=Math.round(hs[x]);
+    for(let y=top;y<H;y++)solid[y*W+x]=1;
+  }
+  colActive.fill(0);settling=false;terrainDirty=true;
+}
+function topY(x){
+  x=clamp(x|0,0,W-1);
+  for(let y=0;y<H;y++)if(solid[y*W+x])return y;
+  return H;
+}
+function restYAt(x){
+  let m=H;
+  for(let dx=-6;dx<=6;dx+=2)m=Math.min(m,topY(x+dx));
+  return m;
+}
+function moveTank(t,dir){
+  if(t.fuel<=0)return false;
+  const other=tanks[1-t.id];
+  const nx=t.x+dir*MOVE_SPD;
+  if(nx<16||nx>W-16)return false;
+  if(Math.abs(nx-other.x)<90)return false;
+  if(topY(t.x)-topY(nx)>1.5)return false; /* 한 걸음에 1.5px 넘게 솟은 가파른 곳은 오르지 못한다 */
+  t.x=nx;t.fuel=Math.max(0,t.fuel-MOVE_SPD);
+  if(Math.random()<0.25)parts.push({x:t.x-dir*6,y:t.y,vx:-dir*rnd(.2,.8),vy:rnd(-.6,-.1),life:20,max:20,g:0.02,size:2,color:'rgba(190,160,120,0.6)'});
+  return true;
+}
+function restY(t){
+  let m=H;
+  for(let dx=-6;dx<=6;dx+=2)m=Math.min(m,topY(t.x+dx));
+  return m;
+}
+function carve(cx,cy,r){
+  const x0=Math.max(0,Math.floor(cx-r)),x1=Math.min(W-1,Math.ceil(cx+r));
+  for(let x=x0;x<=x1;x++){
+    const dx=x-cx,dy=Math.sqrt(Math.max(0,r*r-dx*dx));
+    const y0=Math.max(0,Math.floor(cy-dy)),y1=Math.min(H-8,Math.ceil(cy+dy));
+    for(let y=y0;y<=y1;y++)solid[y*W+x]=0;
+    colActive[x]=1;
+  }
+  /* 분화구 가장자리를 그을린다 */
+  const R2=(r+6)*(r+6),r2=r*r;
+  const sx0=Math.max(0,Math.floor(cx-r-6)),sx1=Math.min(W-1,Math.ceil(cx+r+6));
+  const sy0=Math.max(0,Math.floor(cy-r-6)),sy1=Math.min(H-8,Math.ceil(cy+r+6));
+  for(let y=sy0;y<=sy1;y++){
+    for(let x=sx0;x<=sx1;x++){
+      const dx=x-cx,dy=y-cy,d2=dx*dx+dy*dy;
+      if(d2>=r2&&d2<=R2&&solid[y*W+x])solid[y*W+x]=2;
+    }
+  }
+  settling=true;terrainDirty=true;
+}
+let flip=0;
+function settleStep(){
+  let any=false;
+  flip^=1;
+  for(let k=0;k<W;k++){
+    const x=flip?k:W-1-k;
+    if(!colActive[x])continue;
+    let moved=false;
+    for(let y=H-8;y>=0;y--){
+      const i=y*W+x,v=solid[i];
+      if(!v)continue;
+      if(!solid[i+W]){solid[i]=0;solid[i+W]=v;moved=true;continue}
+      /* 산사태: 옆이 2픽셀 이상 낮으면 비스듬히 흘러내린다 */
+      const d=(Math.random()<.5)?-1:1;
+      for(let s=0;s<2;s++){
+        const nx=x+(s?-d:d);
+        if(nx<0||nx>=W)continue;
+        if(!solid[y*W+nx]&&!solid[(y+1)*W+nx]){
+          solid[i]=0;solid[(y+1)*W+nx]=v;colActive[nx]=1;moved=true;break;
+        }
+      }
+    }
+    if(moved)any=true;else colActive[x]=0;
+  }
+  if(any)terrainDirty=true;
+  settling=any;
+}
+function renderTerrain(){
+  const d=img.data;
+  for(let x=0;x<W;x++){
+    let depth=-1;
+    for(let y=0;y<H;y++){
+      const i=y*W+x,p=i*4;
+      if(solid[i]){
+        depth=depth<0?0:depth+1;
+        let r,g,b;
+        if(depth<4){r=96;g=196;b=70}
+        else if(depth<9){r=72;g=142;b=54}
+        else{
+          const s=1-y/H*0.55,n=((x*31+y*17)%9===0)?0.82:1;
+          r=156*s*n;g=108*s*n;b=64*s*n;
+        }
+        if(solid[i]===2){r*=0.42;g*=0.42;b*=0.42}
+        d[p]=r;d[p+1]=g;d[p+2]=b;d[p+3]=255;
+      }else{depth=-1;d[p+3]=0}
+    }
+  }
+  tctx.putImageData(img,0,0);
+}
+
+/* ---------- 발사체 ---------- */
+function frameStep(p,tk,ign){
+  const sp=Math.max(Math.abs(p.vx),Math.abs(p.vy));
+  const n=Math.max(1,Math.ceil(sp));
+  p.age=(p.age||0)+1;
+  for(let i=0;i<n;i++){
+    p.x+=p.vx/n;p.y+=p.vy/n;
+    p.vy+=G/n;p.vx+=p.wind*WIND_K/n;
+    if(p.x<-80||p.x>W+80||p.y>H+80)return 'out';
+    if(!ign){
+      const xi=p.x|0,yi=p.y|0;
+      if(xi>=0&&xi<W&&yi>=0&&yi<H&&solid[yi*W+xi])return 'terrain';
+    }
+    if(tk){
+      for(const t of tk){
+        if(!t.alive)continue;
+        if(t.id===p.owner&&p.age<14)continue;
+        const dx=p.x-t.x,dy=p.y-(t.y-8*TS);
+        if(dx*dx+dy*dy<76)return t;
+      }
+    }
+  }
+  return null;
+}
+function muzzle(t,ang){
+  const a=rad(ang);
+  return {x:t.x+Math.cos(a)*16*TS,y:t.y-12*TS-Math.sin(a)*16*TS};
+}
+function cycleWeapon(dir){
+  const t=tanks[0];
+  if(state!=='aim'||turn!==0)return;
+  const list=ownedW(t);
+  let i=list.findIndex(w=>w.key===t.sel);if(i<0)i=0;
+  t.sel=list[(i+dir+list.length)%list.length].key;
+  sfx('buy');
+}
+function fire(t){
+  let w=wpnOf(t);
+  if(w.key!=='basic'){
+    if(!((t.ammo[w.key]||0)>0))w=WEAPONS[0];
+    else{t.ammo[w.key]--;if(t.ammo[w.key]<=0)t.sel='basic'}
+  }
+  const sp=t.power*0.115,m=muzzle(t,t.angle),a=rad(t.angle);
+  projs.push({x:m.x,y:m.y,vx:Math.cos(a)*sp,vy:-Math.sin(a)*sp,owner:t.id,wind,
+    age:0,delay:0,burrowLeft:w.burrow||0,burrowing:false,trail:[],dead:false,
+    kind:w.kind,r:w.r,dmg:w.dmg,hops:w.hops||0});
+  sfx('fire');
+  state='fly';
+}
+function newProj(p,o){
+  return Object.assign({x:p.x,y:p.y,vx:0,vy:0,owner:p.owner,wind:p.wind,age:0,delay:0,
+    burrowLeft:0,burrowing:false,trail:[],dead:false,kind:'std',r:p.r,dmg:p.dmg,hops:0},o);
+}
+function addDirt(cx,cy,r){
+  const x0=Math.max(0,Math.floor(cx-r)),x1=Math.min(W-1,Math.ceil(cx+r));
+  for(let x=x0;x<=x1;x++){
+    const dx=x-cx,dy=Math.sqrt(Math.max(0,r*r-dx*dx));
+    const y0=Math.max(0,Math.floor(cy-dy)),y1=Math.min(H-8,Math.ceil(cy+dy));
+    for(let y=y0;y<=y1;y++)if(!solid[y*W+x])solid[y*W+x]=1;
+    colActive[x]=1;
+  }
+  for(let i=0;i<40;i++){
+    const a=rnd(0,6.28),s=rnd(.5,2.5);
+    parts.push({x:cx,y:cy,vx:Math.cos(a)*s,vy:Math.sin(a)*s-1,life:rnd(20,45),max:45,g:0.1,size:rnd(2,4),color:'#9a6c3a'});
+  }
+  settling=true;terrainDirty=true;
+}
+function explode(p){
+  p.dead=true;
+  const o=p.owner;
+  if(p.kind==='dirt'){addDirt(p.x,p.y,p.r);sfx('boom');return}
+  if(p.kind==='shaft'){
+    for(let i=0;i<5;i++)pending.push({t:1+i*7,x:p.x,y:p.y+i*20,r:p.r,dmg:p.dmg,owner:o});
+    return;
+  }
+  boom(p.x,p.y,p.r,o,p.dmg);
+  if(p.kind==='hop'&&p.hops>0){
+    const sp=Math.hypot(p.vx,p.vy);
+    projs.push(newProj(p,{x:p.x,y:p.y-8,vx:p.vx*0.7,vy:-Math.max(3.2,sp*0.45),delay:10,kind:'hop',hops:p.hops-1}));
+  }
+}
+function splitMirv(p){
+  p.dead=true;
+  for(let i=0;i<5;i++){
+    projs.push(newProj(p,{vx:p.vx+(i-2)*0.9,vy:p.vy*0.8+rnd(-0.2,0.2),age:12,r:34,dmg:30}));
+  }
+  sfx('fire');
+}
+function boom(x,y,r,owner,dmgBase){
+  carve(Math.round(x),Math.round(y),r);
+  rings.push({x,y,r:r*0.4,max:r*2.1,life:22,t:22});
+  flash=Math.max(flash,Math.min(.95,Math.max(.18,(r-30)/110)));
+  if(r>=100)rings.push({x,y,r:r*0.2,max:r*3,life:38,t:38});
+  if(r>=150){for(let i=0;i<160;i++){const a=rnd(0,6.28),sp2=rnd(2,12);parts.push({x,y,vx:Math.cos(a)*sp2,vy:Math.sin(a)*sp2-2,life:rnd(40,100),max:100,g:-0.02,size:rnd(4,9),color:['#fff3b0','#ffc233','#ff7a1a'][(Math.random()*3)|0]})}}
+  const nf=Math.round(r*1.9);
+  for(let i=0;i<nf;i++){
+    const a=rnd(0,6.28),s=rnd(.6,3.6)*(r/30+.5);
+    parts.push({x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s-.4,life:rnd(18,40),max:40,g:-0.01,size:rnd(2,5),
+      color:['#fff3b0','#ffc233','#ff7a1a','#e8452c'][(Math.random()*4)|0]});
+  }
+  for(let i=0;i<nf*1.1;i++){
+    const a=rnd(3.3,6.1),s=rnd(2,7.5)*(r/45+.4);
+    parts.push({x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s,life:rnd(40,95),max:95,g:0.14,size:rnd(1.5,4),
+      color:['#7a5530','#9a6c3a','#5b8a3a'][(Math.random()*3)|0]});
+  }
+  for(let i=0;i<8;i++){
+    parts.push({x:x+rnd(-r/2,r/2),y:y+rnd(-r/2,r/2),vx:rnd(-.4,.4),vy:rnd(-1,-.2),life:rnd(40,80),max:80,g:-0.01,size:rnd(6,12),
+      color:'rgba(70,60,70,0.35)'});
+  }
+  shake=Math.max(shake,Math.min(40,r*0.3));
+  sfx('boom');
+  for(const t of tanks){
+    if(!t.alive)continue;
+    const d=Math.hypot(t.x-x,(t.y-8*TS)-y);
+    if(d<r+14){
+      const dmg=Math.max(1,Math.round(dmgBase*(1-0.7*d/(r+14))));
+      let hpDmg=dmg;
+      if(t.shield>0){
+        const ab=Math.min(t.shield,hpDmg);
+        t.shield-=ab;hpDmg-=ab;
+        floats.push({x:t.x,y:t.y-30,txt:'-'+ab+' 방어막',life:70,color:'#7fd4ff'});
+        shieldHit=t.id;
+      }
+      if(hpDmg>0){
+        t.hp-=hpDmg;
+        floats.push({x:t.x,y:t.y-24,txt:'-'+hpDmg,life:70,color:'#ff6b6b'});
+      }
+      if(owner!==t.id){
+        const me=tanks[owner],gain=Math.round(dmg*1.2);
+        me.money+=gain;
+        floats.push({x:me.x,y:me.y-30,txt:'+$'+gain,life:70,color:'#ffd24d'});
+      }
+      if(t.hp<=0){t.hp=0;killTank(t)}
+    }
+  }
+}
+function killTank(t){
+  t.alive=false;
+  carve(Math.round(t.x),Math.round(t.y-5),28);
+  for(let i=0;i<60;i++){
+    const a=rnd(0,6.28),s=rnd(1,6);
+    parts.push({x:t.x,y:t.y-8*TS,vx:Math.cos(a)*s,vy:Math.sin(a)*s-1,life:rnd(30,70),max:70,g:0.1,size:rnd(2,5),
+      color:[t.color,'#ffc233','#fff3b0','#333'][(Math.random()*4)|0]});
+  }
+  shake=Math.max(shake,16);
+}
+
+/* ---------- AI ---------- */
+function simDist(me,a,pw,tx,ty){
+  const m=muzzle(me,a),sp=pw*0.115;
+  const p={x:m.x,y:m.y,vx:Math.cos(rad(a))*sp,vy:-Math.sin(rad(a))*sp,wind:aiWind,age:0,owner:me.id};
+  let min=1e9;
+  for(let i=0;i<700;i++){
+    const ev=frameStep(p,null,false);
+    const d=Math.hypot(p.x-tx,p.y-ty);
+    if(d<min)min=d;
+    if(ev)break;
+  }
+  return min;
+}
+function aiSolve(me,foe){
+  const tx=foe.x,ty=foe.y-8*TS;
+  let best={a:90,pw:50},bd=1e9;
+  for(let a=8;a<=172;a+=2){
+    for(let pw=20;pw<=100;pw+=3){
+      const d=simDist(me,a,pw,tx,ty);
+      if(d<bd){bd=d;best={a,pw}}
+    }
+  }
+  const b0=best;
+  for(let a=b0.a-2;a<=b0.a+2;a+=0.5){
+    for(let pw=b0.pw-3;pw<=b0.pw+3;pw+=0.5){
+      if(pw<5||pw>100)continue;
+      const d=simDist(me,a,pw,tx,ty);
+      if(d<bd){bd=d;best={a,pw}}
+    }
+  }
+  return best;
+}
+function planAI(){
+  const me=tanks[1],foe=tanks[0];
+  /* AI는 바람을 정확히 읽지 못한다 (초반일수록 크게 틀린다) */
+  const wErr=Math.max(0.25,0.6-0.04*(round-1));
+  aiWind=wind*(1+rnd(-wErr,wErr))+rnd(-0.6,0.6);
+  const pl=aiSolve(me,foe);
+  /* 조준 오차: 1라운드 약 9도에서 시작해 라운드마다 줄어들지만 2.5도 아래로는 내려가지 않는다 */
+  const e=Math.max(2.5,9-0.55*(round-1));
+  ai.ta=clamp(pl.a+rnd(-e,e),0,180);
+  ai.tp=clamp(pl.pw+rnd(-e*1.6,e*1.6),10,100);
+  ai.wait=35+((Math.random()*30)|0);
+  /* 자폭하지 않는 범위 안에서 가진 특수 무기를 70% 확률로 사용 */
+  const dist=Math.abs(me.x-foe.x);
+  const have=ownedW(me).filter(w=>w.key!=='basic'&&w.r+30<dist);
+  me.sel=(have.length&&Math.random()<0.7)?have[(Math.random()*have.length)|0].key:'basic';
+}
+function aiShop(){
+  const A=tanks[1];
+  A.money+=90+35*round;
+  if(Math.random()<0.8){
+    const pool=WEAPONS.filter(w=>w.price>0&&w.kind!=='dirt');
+    for(let i=0;i<30;i++){
+      const w=pool[(Math.random()*pool.length)|0];
+      if(A.money>=w.price&&(A.ammo[w.key]||0)<w.pack*2){A.money-=w.price;A.ammo[w.key]=(A.ammo[w.key]||0)+w.pack}
+    }
+  }
+  for(let i=0;i<10;i++){
+    const u=UP[0],l=A.lv.armor,c=cost(u,l);
+    if(l<u.max&&A.money>=c&&Math.random()<0.5){A.money-=c;A.lv.armor++}
+  }
+  while(A.money>=SH_COST&&shCharges(A)<SH_MAX&&Math.random()<0.6){A.money-=SH_COST;A.shield=Math.min(SH_PTS*SH_MAX,A.shield+SH_PTS)}
+}
+
+/* ---------- 라운드 진행 ---------- */
+function newGame(){
+  tanks=[newTank(0,'나','#4fa3ff'),newTank(1,'AI','#ff5a5a')];
+  round=1;wins=0;losses=0;
+  newRound();
+}
+function newRound(){
+  const x0=Math.round(rnd(80,170)),x1=Math.round(W-rnd(80,170));
+  genTerrain([x0,x1]);
+  const t0=tanks[0],t1=tanks[1];
+  t0.x=x0;t1.x=x1;
+  for(const t of tanks){t.y=restY(t);t.vy=0;t.hp=maxHp(t);t.alive=true;t.fuel=MOVE_MAX}
+  projs=[];pending=[];parts=[];floats=[];rings=[];flash=0;shake=0;
+  wind=Math.round(rnd(-6,6)*10)/10;
+  turn=(round%2===1)?0:1;
+  hideOverlay();
+  startTurn();
+}
+function startTurn(){
+  tanks[turn].fuel=MOVE_MAX;
+  if(turn===0){state='aim'}
+  else beginAIMove();
+}
+function reach(t,dir){
+  let x=t.x,d=0;
+  while(d<MOVE_MAX){
+    const nx=x+dir*MOVE_SPD;
+    if(nx<16||nx>W-16)break;
+    if(Math.abs(nx-tanks[1-t.id].x)<140)break;
+    if(topY(x)-topY(nx)>1.5)break;
+    x=nx;d+=MOVE_SPD;
+  }
+  return d;
+}
+function beginAIMove(){
+  const me=tanks[1];
+  let tx=me.x;
+  if(Math.random()<0.75){
+    const opts=[];
+    for(const dir of [-1,1]){const rc=reach(me,dir);if(rc>=15)opts.push({dir,rc})}
+    if(opts.length){
+      const o=opts[(Math.random()*opts.length)|0];
+      tx=me.x+o.dir*rnd(15,Math.min(o.rc,60));
+    }
+  }
+  ai.moveTo=tx;
+  state='aiMove';
+}
+function endTurn(){
+  if(!tanks[0].alive||!tanks[1].alive){roundOver();return}
+  turn^=1;
+  wind=clamp(Math.round((wind+rnd(-1.5,1.5))*10)/10,-7,7);
+  startTurn();
+}
+function roundOver(){
+  const pa=tanks[0].alive,aa=tanks[1].alive;
+  let res;
+  if(pa&&!aa){res='win';wins++}
+  else if(!pa&&aa){res='lose';losses++}
+  else res='draw';
+  const bonus=res==='win'?150+round*25:(res==='lose'?60:80);
+  tanks[0].money+=bonus;
+  state='shop';
+  renderShop(res,bonus);
+}
+
+/* ---------- 오버레이 / 상점 ---------- */
+const ov=document.getElementById('overlay');
+function hideOverlay(){ov.classList.add('hide');ov.innerHTML=''}
+function showMenu(){
+  ov.classList.remove('hide');
+  ov.innerHTML=`<div class="card"><h2>미사일 머니</h2>
+  <p>돈을 벌어 미사일을 강화하고 상대 AI 탱크를 무너뜨리는 턴제 게임입니다.</p>
+  <p>적에게 준 피해만큼 돈이 들어옵니다. 라운드가 끝나면 상점에서 중형 대형 미사일 확산탄 관통탄 굴착탄 도약탄 흙 폭탄 그리고 핵폭탄까지 무기를 사서 골라 쏩니다.</p>
+  <p>바람이 매 턴 조금씩 바뀌니 화면 위쪽의 풍향 표시를 보고 조준하세요.</p>
+  <button class="primary" id="start">게임 시작</button></div>`;
+}
+function pipsHtml(l,max){
+  let s='';
+  for(let i=0;i<max;i++)s+='<span class="pip'+(i<l?' on':'')+'"></span>';
+  return s;
+}
+let lastShop={res:'win',bonus:0};
+function renderShop(res,bonus){
+  lastShop={res,bonus};
+  const P=tanks[0],A=tanks[1];
+  const title=res==='win'?'승리!':(res==='lose'?'패배...':'무승부');
+  let h=`<div class="card"><h2>${title}</h2>
+  <p class="sub">라운드 ${round} 종료 / 보너스 +$${bonus} / 보유 자금 <b>$${P.money}</b> / 전적 ${wins}승 ${losses}패</p>
+  <div class="sec">무기 (구매하면 다음 라운드부터 Q와 E 키 또는 무기 버튼으로 골라 쏩니다)</div><div class="shop">`;
+  for(const w of WEAPONS){
+    if(w.price===0)continue;
+    const n=P.ammo[w.key]||0;
+    h+=`<div class="row"><div class="nm"><b>${w.name}</b><small>${w.desc}</small></div>
+    <div class="cur">보유 ${n}발</div><div class="cur">1묶음 ${w.pack}발</div>
+    <button data-buy="w:${w.key}" ${(P.money<w.price||n>=99)?'disabled':''}>$${w.price}</button></div>`;
+  }
+  h+=`</div><div class="sec">방어</div><div class="shop">`;
+  const u=UP[0],l=P.lv.armor,maxed=l>=u.max,c=cost(u,l);
+  h+=`<div class="row"><div class="nm"><b>${u.name}</b><small>${u.desc}</small></div>
+    <div class="pips">${pipsHtml(l,u.max)}</div><div class="cur">${u.fmt(l)}</div>
+    <button data-buy="armor" ${(maxed||P.money<c)?'disabled':''}>${maxed?'MAX':'$'+c}</button></div>`;
+  const sc=shCharges(P),smax=sc>=SH_MAX;
+  h+=`<div class="row"><div class="nm"><b>방어막 (소모품)</b><small>피해를 대신 흡수합니다 (1회 ${SH_PTS})</small></div>
+    <div class="pips">${pipsHtml(sc,SH_MAX)}</div><div class="cur">보유 ${Math.ceil(P.shield)}</div>
+    <button data-buy="shield" ${(smax||P.money<SH_COST)?'disabled':''}>${smax?'MAX':'$'+SH_COST}</button></div></div>`;
+  const aw=WEAPONS.filter(w=>(A.ammo[w.key]||0)>0).map(w=>w.name+' '+A.ammo[w.key]).join(', ')||'없음';
+  h+=`<p style="font-size:12px;color:#8b90b5">상대 보유 무기: ${aw} / 장갑 ${A.lv.armor} / 방어막 ${Math.ceil(A.shield)}</p>
+  <button class="primary" id="next">다음 라운드 시작</button></div>`;
+  ov.classList.remove('hide');
+  ov.innerHTML=h;
+}
+ov.addEventListener('click',e=>{
+  const b=e.target.closest('button');
+  if(!b||b.disabled)return;
+  ensureAudio();
+  if(b.id==='start'){newGame()}
+  else if(b.id==='next'){aiShop();round++;newRound()}
+  else if(b.dataset.buy){
+    const k=b.dataset.buy,P=tanks[0];
+    let ok=false;
+    if(k==='shield'){
+      if(shCharges(P)<SH_MAX&&P.money>=SH_COST){P.money-=SH_COST;P.shield=Math.min(SH_PTS*SH_MAX,P.shield+SH_PTS);ok=true}
+    }else if(k==='armor'){
+      const u=UP[0],l=P.lv.armor,c=cost(u,l);
+      if(l<u.max&&P.money>=c){P.money-=c;P.lv.armor++;ok=true}
+    }else if(k.startsWith('w:')){
+      const w=WEAPONS.find(x=>x.key===k.slice(2));
+      if(w&&P.money>=w.price){
+        P.money-=w.price;P.ammo[w.key]=Math.min(99,(P.ammo[w.key]||0)+w.pack);
+        if(P.sel==='basic')P.sel=w.key;
+        ok=true;
+      }
+    }
+    if(ok){sfx('buy');renderShop(lastShop.res,lastShop.bonus)}
+  }
+});
+
+/* ---------- 사운드 ---------- */
+let ac=null,muted=true;
+function ensureAudio(){
+  try{
+    if(!ac)ac=new (window.AudioContext||window.webkitAudioContext)();
+    if(ac.state==='suspended')ac.resume();
+  }catch(e){}
+}
+function sfx(k){
+  if(muted||!ac)return;
+  try{
+    const t=ac.currentTime;
+    if(k==='fire'){
+      const o=ac.createOscillator(),g=ac.createGain();
+      o.type='square';o.frequency.setValueAtTime(520,t);o.frequency.exponentialRampToValueAtTime(90,t+.25);
+      g.gain.setValueAtTime(.06,t);g.gain.exponentialRampToValueAtTime(.001,t+.25);
+      o.connect(g);g.connect(ac.destination);o.start(t);o.stop(t+.26);
+    }else if(k==='boom'){
+      const len=Math.floor(ac.sampleRate*.5),b=ac.createBuffer(1,len,ac.sampleRate),d=b.getChannelData(0);
+      for(let i=0;i<len;i++)d[i]=(Math.random()*2-1)*Math.pow(1-i/len,2.5);
+      const s=ac.createBufferSource();s.buffer=b;
+      const f=ac.createBiquadFilter();f.type='lowpass';f.frequency.value=650;
+      const g=ac.createGain();g.gain.value=.35;
+      s.connect(f);f.connect(g);g.connect(ac.destination);s.start(t);
+    }else if(k==='buy'){
+      const o=ac.createOscillator(),g=ac.createGain();
+      o.type='triangle';o.frequency.setValueAtTime(660,t);o.frequency.setValueAtTime(990,t+.08);
+      g.gain.setValueAtTime(.07,t);g.gain.exponentialRampToValueAtTime(.001,t+.2);
+      o.connect(g);g.connect(ac.destination);o.start(t);o.stop(t+.21);
+    }
+  }catch(e){}
+}
+
+/* ---------- 입력 ---------- */
+const isDown=k=>keys[k]||hold[k];
+window.addEventListener('keydown',e=>{
+  const c=e.code;
+  if(['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Space'].includes(c)&&state!=='menu'&&state!=='shop')e.preventDefault();
+  ensureAudio();
+  if(!e.repeat&&(c==='KeyQ'||c==='KeyE')){cycleWeapon(c==='KeyQ'?-1:1);return}
+  if(c==='Space'){
+    if(state==='aim'&&turn===0&&!e.repeat)fire(tanks[0]);
+    return;
+  }
+  keys[c]=true;
+});
+window.addEventListener('keyup',e=>{keys[e.code]=false});
+document.querySelectorAll('[data-hold]').forEach(b=>{
+  const k={left:'ArrowLeft',right:'ArrowRight',up:'ArrowUp',down:'ArrowDown',mleft:'MoveL',mright:'MoveR'}[b.dataset.hold];
+  const on=e=>{e.preventDefault();ensureAudio();hold[k]=true};
+  const off=()=>{hold[k]=false};
+  b.addEventListener('pointerdown',on);
+  b.addEventListener('pointerup',off);
+  b.addEventListener('pointerleave',off);
+  b.addEventListener('pointercancel',off);
+});
+document.querySelectorAll('[data-wp]').forEach(b=>b.addEventListener('click',()=>{ensureAudio();cycleWeapon(+b.dataset.wp)}));
+document.getElementById('fire').addEventListener('click',()=>{
+  ensureAudio();
+  if(state==='aim'&&turn===0)fire(tanks[0]);
+});
+document.getElementById('mute').addEventListener('click',e=>{
+  ensureAudio();muted=!muted;e.target.textContent=muted?'소리 켬':'소리 끔';
+});
+document.getElementById('reset').addEventListener('click',()=>{ensureAudio();newGame()});
+
+/* ---------- 업데이트 ---------- */
+function update(){
+  if(shake>0)shake=Math.max(0,shake-0.6);
+
+  if(state==='aim'&&turn===0){
+    const t=tanks[0],fine=(keys.ShiftLeft||keys.ShiftRight)?0.25:1;
+    if(isDown('ArrowLeft'))t.angle+=0.5*fine;
+    if(isDown('ArrowRight'))t.angle-=0.5*fine;
+    if(isDown('MoveL')||keys.KeyA)moveTank(t,-1);
+    if(isDown('MoveR')||keys.KeyD)moveTank(t,1);
+    if(isDown('ArrowUp')||keys.KeyW)t.power+=0.35*fine;
+    if(isDown('ArrowDown')||keys.KeyS)t.power-=0.35*fine;
+    t.angle=clamp(t.angle,0,180);t.power=clamp(t.power,5,100);
+  }
+  if(state==='aiMove'){
+    const me=tanks[1],d=ai.moveTo-me.x;
+    let go=Math.abs(d)>=1&&me.fuel>0;
+    if(go)go=moveTank(me,Math.sign(d));
+    if(!go&&Math.abs(me.y-restY(me))<0.5){planAI();state='ai'}
+  }
+  if(state==='ai'){
+    const me=tanks[1];
+    const da=ai.ta-me.angle,dp=ai.tp-me.power;
+    me.angle+=clamp(da,-1.1,1.1);me.power+=clamp(dp,-0.8,0.8);
+    if(Math.abs(da)<1.2&&Math.abs(dp)<1&&--ai.wait<=0)fire(me);
+  }
+
+  if(state==='fly'){
+    for(const q of pending){q.t--;if(q.t<=0){boom(q.x,q.y,q.r,q.owner,q.dmg);q.done=true}}
+    pending=pending.filter(q=>!q.done);
+    for(const p of projs){
+      if(p.dead)continue;
+      if(p.delay>0){p.delay--;continue}
+      const ev=frameStep(p,tanks,p.burrowing);
+      p.trail.push({x:p.x,y:p.y});
+      if(p.trail.length>14)p.trail.shift();
+      if(ev==='out'){p.dead=true;continue}
+      if(ev&&typeof ev==='object'){explode(p);continue}
+      if(p.burrowing){
+        p.burrowLeft-=Math.hypot(p.vx,p.vy);
+        p.vx*=0.9;p.vy*=0.9;
+        if(p.burrowLeft<=0)explode(p);
+        continue;
+      }
+      if(p.kind==='mirv'&&p.vy>0&&p.age>8){splitMirv(p);continue}
+      if(ev==='terrain'){
+        if(p.burrowLeft>0){p.burrowing=true;p.vx*=0.7;p.vy*=0.7}
+        else explode(p);
+      }
+    }
+    projs=projs.filter(p=>!p.dead);
+    if(projs.length===0&&pending.length===0){state='settle';settleWait=28}
+  }
+
+  if(settling){for(let i=0;i<4&&settling;i++)settleStep()}
+  if(flash>0)flash=Math.max(0,flash-0.05);
+  for(const g of rings){g.life--;g.r+=(g.max-g.r)*0.2}
+  rings=rings.filter(g=>g.life>0);
+
+  for(const t of tanks){
+    if(!t.alive)continue;
+    const target=restY(t);
+    if(t.y<target){t.vy+=0.25;t.y=Math.min(target,t.y+t.vy)}
+    else{t.y=target;t.vy=0}
+  }
+
+  if(state==='settle'){
+    const landed=tanks.every(t=>!t.alive||Math.abs(t.y-restY(t))<0.5);
+    if(!settling&&landed&&--settleWait<=0)endTurn();
+  }
+
+  for(const p of parts){p.x+=p.vx;p.y+=p.vy;p.vy+=p.g;p.life--}
+  parts=parts.filter(p=>p.life>0);
+  for(const f of floats){f.y-=0.5;f.life--}
+  floats=floats.filter(f=>f.life>0);
+}
+
+/* ---------- 렌더 ---------- */
+function drawTank(t,active){
+  if(!t.alive)return;
+  const a=rad(t.angle);
+  ctx.save();
+  ctx.translate(t.x,t.y);ctx.scale(TS,TS);
+  ctx.strokeStyle='#222';ctx.lineWidth=6;ctx.lineCap='round';
+  ctx.beginPath();ctx.moveTo(0,-12);
+  ctx.lineTo(Math.cos(a)*17,-12-Math.sin(a)*17);ctx.stroke();
+  ctx.strokeStyle=t.color;ctx.lineWidth=3.6;
+  ctx.beginPath();ctx.moveTo(0,-12);
+  ctx.lineTo(Math.cos(a)*17,-12-Math.sin(a)*17);ctx.stroke();
+  ctx.fillStyle='#2a2a33';ctx.fillRect(-14,-4,28,4);
+  ctx.fillStyle=t.color;ctx.fillRect(-12,-9,24,6);
+  ctx.beginPath();ctx.arc(0,-9,7,Math.PI,0);ctx.fill();
+  ctx.restore();
+  if(t.shield>0){
+    const k=t.shield/(SH_PTS*SH_MAX),pulse=1+Math.sin(Date.now()/220)*0.05;
+    const cx=t.x,cy=t.y-6,R=17*pulse;
+    ctx.fillStyle='rgba(110,200,255,'+(0.10+0.12*k)+')';
+    ctx.beginPath();ctx.arc(cx,cy,R,0,6.3);ctx.fill();
+    ctx.strokeStyle='rgba(150,225,255,'+(0.45+0.4*k)+')';ctx.lineWidth=1.6;
+    ctx.beginPath();ctx.arc(cx,cy,R,0,6.3);ctx.stroke();
+  }
+  if(active){
+    const bob=Math.sin(Date.now()/160)*3;
+    ctx.fillStyle='#ffd24d';
+    ctx.beginPath();ctx.moveTo(t.x,t.y-18+bob);ctx.lineTo(t.x-5,t.y-27+bob);ctx.lineTo(t.x+5,t.y-27+bob);ctx.closePath();ctx.fill();
+  }
+}
+function drawPreview(t){
+  const a=rad(t.angle),sp=t.power*0.115,m=muzzle(t,t.angle);
+  const p={x:m.x,y:m.y,vx:Math.cos(a)*sp,vy:-Math.sin(a)*sp,wind,age:0,owner:t.id};
+  ctx.fillStyle='rgba(255,255,255,.55)';
+  for(let i=0;i<36;i++){
+    const ev=frameStep(p,null,false);
+    if(i%3===0){ctx.beginPath();ctx.arc(p.x,p.y,1.6,0,6.3);ctx.fill()}
+    if(ev)break;
+  }
+}
+function hpBar(x,y,w,t,align){
+  const mh=maxHp(t),r=clamp(t.hp/mh,0,1);
+  ctx.fillStyle='rgba(0,0,0,.55)';ctx.fillRect(x,y,w,12);
+  ctx.fillStyle=r>.5?'#4cd964':(r>.25?'#ffcc33':'#ff4d4d');
+  const fw=(w-2)*r;
+  ctx.fillRect(align==='right'?x+w-1-fw:x+1,y+1,fw,10);
+  ctx.strokeStyle='rgba(255,255,255,.35)';ctx.strokeRect(x+.5,y+.5,w-1,11);
+}
+function txt(s,x,y,size,color,align){
+  ctx.font='bold '+size+'px system-ui,"Apple SD Gothic Neo","Malgun Gothic",sans-serif';
+  ctx.textAlign=align||'left';
+  ctx.fillStyle='rgba(0,0,0,.6)';ctx.fillText(s,x+1,y+1);
+  ctx.fillStyle=color;ctx.fillText(s,x,y);
+}
+function drawHUD(){
+  const P=tanks[0],A=tanks[1];
+  txt('나  '+Math.round(P.hp)+'/'+maxHp(P),16,22,13,'#9fd0ff');
+  hpBar(16,28,220,P,'left');
+  txt('$'+P.money,16,58,15,'#ffd24d');
+  if(P.shield>0)txt('방어막 '+Math.ceil(P.shield),16,76,12,'#7fd4ff');
+  txt('AI  '+Math.round(A.hp)+'/'+maxHp(A),W-16,22,13,'#ffb0b0','right');
+  hpBar(W-236,28,220,A,'right');
+  if(A.shield>0)txt('방어막 '+Math.ceil(A.shield),W-16,58,12,'#7fd4ff','right');
+  txt('라운드 '+round+'   '+wins+'승 '+losses+'패',W/2,22,14,'#fff','center');
+  let w;
+  if(wind===0)w='바람 없음';
+  else w='바람 '+(wind<0?'◀ ':'▶ ')+Math.abs(wind).toFixed(1);
+  txt(w,W/2,42,14,'#bfe7ff','center');
+  let st='';
+  if(state==='aim')st='당신의 차례';
+  else if(state==='ai'||state==='aiMove')st='AI가 조준 중...';
+  else if(state==='fly')st='';
+  if(st)txt(st,W/2,62,13,'#ffd24d','center');
+}
+function draw(){
+  ctx.save();
+  if(shake>0)ctx.translate((Math.random()-.5)*shake,(Math.random()-.5)*shake);
+  ctx.drawImage(bg,0,0);
+  if(terrainDirty){renderTerrain();terrainDirty=false}
+  ctx.drawImage(tcv,0,0);
+  if(state==='aim'&&turn===0&&tanks[0].alive)drawPreview(tanks[0]);
+  for(const t of tanks)drawTank(t,(state==='aim'&&t.id===0)||(state==='ai'&&t.id===1));
+  for(const p of projs){
+    if(p.delay>0)continue;
+    if(p.trail.length>1){
+      ctx.strokeStyle=p.burrowing?'rgba(150,110,60,.6)':'rgba(255,200,90,.7)';
+      ctx.lineWidth=2;ctx.beginPath();
+      ctx.moveTo(p.trail[0].x,p.trail[0].y);
+      for(const q of p.trail)ctx.lineTo(q.x,q.y);
+      ctx.stroke();
+    }
+    ctx.fillStyle=p.burrowing?'#a98355':'#fff';
+    ctx.beginPath();ctx.arc(p.x,p.y,3,0,6.3);ctx.fill();
+  }
+  for(const p of parts){
+    const a=clamp(p.life/p.max,0,1);
+    ctx.globalAlpha=Math.min(1,a*1.6);
+    ctx.fillStyle=p.color;
+    ctx.beginPath();ctx.arc(p.x,p.y,p.size*(p.size>5?(2-a):a*.7+.3),0,6.3);ctx.fill();
+  }
+  ctx.globalAlpha=1;
+  for(const g of rings){
+    ctx.strokeStyle='rgba(255,230,170,'+(g.life/g.t*0.8)+')';
+    ctx.lineWidth=2+g.life/5;
+    ctx.beginPath();ctx.arc(g.x,g.y,g.r,0,6.3);ctx.stroke();
+  }
+  if(flash>0){ctx.fillStyle='rgba(255,240,200,'+flash+')';ctx.fillRect(0,0,W,H)}
+  for(const f of floats){
+    ctx.globalAlpha=clamp(f.life/30,0,1);
+    txt(f.txt,f.x,f.y,15,f.color,'center');
+  }
+  ctx.globalAlpha=1;
+  ctx.restore();
+  drawHUD();
+  updatePanel();
+}
+const vWpn=document.getElementById('vWpn'),vAngle=document.getElementById('vAngle'),vPower=document.getElementById('vPower'),
+  vInfo=document.getElementById('vInfo'),fireBtn=document.getElementById('fire');
+function updatePanel(){
+  const t=tanks[0];
+  if(!t)return;
+  vAngle.textContent=Math.round(t.angle)+'°';
+  vPower.textContent=Math.round(t.power);
+  const w=wpnOf(t);
+  vWpn.textContent=w.name+(w.key==='basic'?'':' x'+(t.ammo[w.key]||0));
+  vInfo.textContent=(t.shield>0?'방어막 '+Math.ceil(t.shield)+' / ':'')+'이동 '+Math.round(t.fuel);
+  fireBtn.disabled=!(state==='aim'&&turn===0);
+}
+
+/* ---------- 메인 루프 ---------- */
+let last=performance.now(),acc=0;
+function loop(now){
+  acc+=Math.min(50,now-last);last=now;
+  while(acc>=16.67){update();acc-=16.67}
+  draw();
+  requestAnimationFrame(loop);
+}
+makeBg();
+tanks=[newTank(0,'나','#4fa3ff'),newTank(1,'AI','#ff5a5a')];
+{
+  const x0=130,x1=W-130;
+  genTerrain([x0,x1]);
+  tanks[0].x=x0;tanks[1].x=x1;
+  for(const t of tanks){t.y=restY(t);t.hp=maxHp(t)}
+}
+showMenu();
+requestAnimationFrame(loop);
+
+/* 테스트용 훅 */
+window.__game={planAI,ai,moveTank,fireT:t=>fire(t),setRound:n=>{round=n},boom,get state(){return state},get tanks(){return tanks},get round(){return round},fire:()=>fire(tanks[0]),update,newGame};
+})();
+</script>
+</body>
+</html>
